@@ -5,6 +5,7 @@ graphs stored in an instance of the Neo4j database.
 """
 import os
 import json
+import time
 import warnings
 
 from neo4j import GraphDatabase
@@ -43,7 +44,7 @@ class Neo4jGraph(Graph):
                  user=None, password=None,
                  node_label="node",
                  edge_label="edge",
-                 unique_node_ids=True):
+                 unique_node_ids=False):
         """Initialize Neo4jGraph object.
 
         Parameters
@@ -90,7 +91,11 @@ class Neo4jGraph(Graph):
         """Execute a Cypher query."""
         with self._driver.session() as session:
             if len(query) > 0:
+                # Time this query
+                #start = time.time()
                 result = session.run(query)
+                #end = time.time()
+                #print(f"Query {query} executed in {end - start} seconds")
                 return result.data()
 
     def _close(self):
@@ -199,13 +204,30 @@ class Neo4jGraph(Graph):
         node_id : hashable, node id.
         """
         query = generic.get_node_attrs(
-            node_id, self._node_label,
-            "attributes")
-        result = self._execute(query)
-        attrs = generic.properties_to_attributes(
-            result, "attributes")
-        return attrs
+            node_id = node_id, 
+            node_label = self._node_label,
+            attrs_var = "attributes"
+        )
+        result = self._execute(query)[0]["attributes"]
+        return result
 
+    def get_node_based_on_previous_ids(self, node_id):
+        """Get node attributes.
+
+        Parameters
+        ----------
+        graph : networkx.(Di)Graph or regraph.neo4j.Neo4jGraph
+        node_id: hashable, node id.
+        """
+        
+        query = """MATCH (n:{}) 
+                WHERE {} IN n.previous_ids
+                RETURN properties(n) AS attributes""".format(self._node_label, 
+                                                             node_id)
+
+        result = self._execute(query)[0]["attributes"]
+        return result["id"], result
+    
     def get_edge(self, s, t):
         """Get edge attributes.
 
@@ -224,30 +246,24 @@ class Neo4jGraph(Graph):
         return generic.properties_to_attributes(
             result, "attributes")
 
-    def add_node(self, node, attrs=None, ignore_naming=False):
+    def add_node(self, node_id, attrs=dict()):
         """Abstract method for adding a node.
 
         Parameters
         ----------
-        node : hashable
+        node_id : hashable
             Prefix that is prepended to the new unique name.
         attrs : dict, optional
             Node attributes.
         """
-        if attrs is None:
-            attrs = dict()
-        normalize_attrs(attrs)
-        query =\
-            rewriting.add_node(
-                "n", node, 'new_id',
-                node_label=self._node_label,
-                attrs=attrs,
-                literal_id=True,
-                ignore_naming=ignore_naming)[0] +\
-            generic.return_vars(['new_id'])
-
+        
+        #normalize_attrs(attrs)
+        query = rewriting.add_node( 
+                node_id = node_id,
+                node_label = self._node_label,
+                attrs = attrs)
         result = self._execute(query)
-        new_id = result.single()['new_id']
+        new_id = result[0]['node_id']
         return new_id
 
     def remove_node(self, node):
@@ -259,10 +275,11 @@ class Neo4jGraph(Graph):
         node_id : hashable, node to remove.
         """
         query =\
-            generic.match_node(
-                "n", node,
-                node_label=self._node_label) +\
+            generic.match_node(var_name ="n", 
+                               node_id=node, 
+                               node_label=self._node_label) +\
             rewriting.remove_node("n")
+        
         result = self._execute(query)
         return result
 
@@ -284,7 +301,7 @@ class Neo4jGraph(Graph):
             {"s": s, "t": t},
             node_label=self._node_label)
         query += rewriting.add_edge(
-            edge_var='new_edge',
+            edge_var='edge',
             source_var="s",
             target_var="t",
             edge_label=self._edge_label,
@@ -325,6 +342,7 @@ class Neo4jGraph(Graph):
             generic.match_node("n", node_id, self._node_label) +
             generic.set_attributes("n", attrs, update=True)
         )
+        
         result = self._execute(query)
         return result
 
@@ -347,6 +365,7 @@ class Neo4jGraph(Graph):
                 self._edge_label) +
             generic.set_attributes("rel", attrs, update=True)
         )
+        
         result = self._execute(query)
         return result
 
@@ -356,6 +375,7 @@ class Neo4jGraph(Graph):
             node_id, node_id,
             node_label=self._node_label,
             edge_label=self._edge_label)
+        
         result = self._execute(query)
         succ = set()
         for record in result:
@@ -404,14 +424,15 @@ class Neo4jGraph(Graph):
                       undirected_edges=None):
         """Find matching of a pattern in a graph."""
         new_pattern_typing = dict()
+        instances = []
+        
         if pattern_typing:
             for graph, pattern_mapping in pattern_typing.items():
                 new_pattern_typing[graph] = normalize_relation(
                     pattern_mapping)
 
-        if len(pattern.nodes()) != 0:
-
-            # filter nodes by typing
+        # filter nodes by typing
+        if False:
             matching_nodes = set()
             for pattern_node in pattern.nodes():
                 for node in self.nodes():
@@ -420,39 +441,39 @@ class Neo4jGraph(Graph):
                         # check types match
                         for graph, pattern_mapping in new_pattern_typing.items():
                             if node in graph_typing[graph].keys() and\
-                               pattern_node in pattern_mapping.keys():
+                                pattern_node in pattern_mapping.keys():
                                 if graph_typing[graph][node] not in pattern_mapping[
                                         pattern_node]:
                                     type_matches = False
                     if type_matches and nodes and node in nodes:
                         matching_nodes.add(node)
 
-            query = rewriting.find_matching(
-                pattern,
-                node_label=self._node_label,
-                edge_label=self._edge_label,
-                nodes=matching_nodes,
-                pattern_typing=new_pattern_typing,
-                undirected_edges=undirected_edges)
+        query = rewriting.find_matching(
+            pattern,
+            node_label=self._node_label,
+            edge_label=self._edge_label,
+            pattern_typing=new_pattern_typing,
+            undirected_edges=undirected_edges)
 
-            result = self._execute(query)
-            instances = list()
+        print("Query: ", query)
+        
+        result = self._execute(query)
+        instances = list()
 
-            for record in result:
-                instance = dict()
-                for k, v in record.items():
-                    instance[k] = dict(v)["id"]
+        for record in result:
+            instance = dict()
+            for k, v in record.items():
+                instance[k] = dict(v)["id"]
 
-                new_instance = dict()
-                for pattern_node, v in instance.items():
-                    if pattern_node not in pattern.nodes():
-                        new_instance[int(pattern_node)] = v
-                    else:
-                        new_instance[pattern_node] = v
+            new_instance = dict()
+            for pattern_node, v in instance.items():
+                if pattern_node not in pattern.nodes():
+                    new_instance[pattern_node] = v
+                else:
+                    new_instance[pattern_node] = v
 
-                instances.append(new_instance)
-        else:
-            instances = []
+            instances.append(new_instance)
+            
         return instances
 
     def relabel_node(self, node_id, new_id):
@@ -471,6 +492,7 @@ class Neo4jGraph(Graph):
                     node_id, new_id, new_id) +
                 "already exists in the graph")
         query = generic.set_id(self._node_label, node_id, new_id)
+        
         result = self._execute(query)
         return result
 
@@ -542,13 +564,16 @@ class Neo4jGraph(Graph):
 
     def nodes_disconnected_from(self, node_id):
         """Find nodes disconnected from the input node."""
+        if type(node_id) == str:
+            node_id = "'{}'".format(node_id)
         query = (
-            "MATCH (n:{} {{id: '{}'}}), (m:{})\n".format(
+            "MATCH (n:{} {{id: {} }}), (m:{})\n".format(
                 self._node_label, node_id, self._node_label) +
             "WHERE NOT (n)-[:{}*1..]-(m) AND n.id <> m.id\n".format(
                 self._edge_label) +
             "RETURN collect(m.id) as disconnected_nodes"
         )
+        
         res = self._execute(query)
         for record in res:
             return record["disconnected_nodes"]

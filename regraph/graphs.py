@@ -286,7 +286,7 @@ class Graph(ABC):
         t : hashable
             Target node id.
         """
-        # print("\n\n\n\n\n\n\n\n\n\n", s, t, self.edges())
+        
         return((s, t) in self.edges())
 
     def set_node_attrs(self, node_id, attrs, normalize=True, update=True):
@@ -542,151 +542,116 @@ class Graph(ABC):
         self.clone_node(node_id, new_id)
         self.remove_node(node_id)
 
-    def merge_nodes(self, nodes, node_id=None, method="union",
-                    edge_method="union"):
+    def merge_nodes(self, nodes, node_id=None):
         """Merge a list of nodes.
-
+        
         Parameters
         ----------
-
         nodes : iterable
-            Collection of node id's to merge.
+            Collection of node ids to merge.
         node_id : hashable, optional
-            Id of a new node corresponding to the result of merge.
-        method : optional
-            Method of node attributes merge: if `"union"` the resulting node
-            will contain the union of all attributes of the merged nodes,
-            if `"intersection"`, the resulting node will contain their
-            intersection. Default value is `"union"`.
-        edge_method : optional
-            Method of edge attributes merge: if `"union"` the edges that were
-            merged will contain the union of all attributes,
-            if `"intersection"` -- their ntersection.
-            Default value is `"union"`.
+            Id of the new node corresponding to the result of merge.
+        method : str, optional
+            Method of node attributes merge, unused in simplified version.
+        edge_method : str, optional
+            Method of edge attributes merge, unused in simplified version.
+            
+        Returns
+        -------
+        node_id : hashable
+            Id of the merged node
+        
+        Notes
+        -----
+        This simplified version specifically handles 't' and 'phase' attributes.
+        't' values must be consistent across all merged nodes, while 'phase' values are added.
         """
-        if len(nodes) > 1:
+        assert len(nodes) > 1, "More than one node should be specified for merging!"
+        
 
-            if method is None:
-                method = "union"
+        # Generate name for new node if not provided
+        if node_id is None:
+            node_id = "_".join(sorted([str(n) for n in nodes]))
+            #if node_id in self.nodes():
+            #    node_id = self.generate_new_node_id(node_id)
+        elif node_id in self.nodes() and (node_id not in nodes):
+            raise GraphError(
+                f"New name for merged node is not valid: node with name '{node_id}' already exists!"
+            )
 
-            if edge_method is None:
-                method = "union"
+        # Process node attributes
+        merged_attrs = {}
+        t_value = None
+        phase_sum = 0
+        
+        # Check and collect attributes from all nodes
+        merged_attrs["previous_ids"] = []
+        actual_nodes = []
+        for node in nodes:
+            # Update nodes list with to match the current nodes in the graph
+            # One of the nodes might be merged in the previous rounds
+            try:
+                attrs = self.get_node(node)
+                actual_nodes.append(node)
+            except IndexError:
+                node, attrs = self.get_node_based_on_previous_ids(node)
+                actual_nodes.append(node)
+            # Handle 't' attribute - must be consistent
+            if 't' in attrs:
+                if t_value is None:
+                    t_value = attrs['t']
+                elif t_value != attrs['t']:
+                    warnings.warn(f"Inconsistent 't' values found when merging nodes. Using t={t_value}")
+            
+            # Handle 'phase' attribute - values are added
+            if 'phase' in attrs:
+                phase_sum += attrs['phase']
+                
+            if 'graph_id' in attrs:
+                merged_attrs['graph_id'] = attrs['graph_id']
+            
+            if 'previous_ids' in attrs:
+                merged_attrs['previous_ids'].extend(attrs['previous_ids'])
+            
+            if 'id' in attrs:
+                merged_attrs["previous_ids"].append(attrs["id"])
+        
+        # Set the merged attributes
+        merged_attrs['t'] = t_value
+        merged_attrs['phase'] = phase_sum
 
-            # Generate name for new node
-            if node_id is None:
-                node_id = "_".join(sorted([str(n) for n in nodes]))
-                if node_id in self.nodes():
-                    node_id = self.generate_new_node_id(node_id)
+        # Collect source and target nodes (nodes connected to the merged nodes)
+        source_nodes = set()  # nodes with edges coming into the merged nodes
+        target_nodes = set()  # nodes with edges going from the merged nodes
+        
+        # Process each node to merge
+        for node in actual_nodes:
+            # Get incoming and outgoing edges
+            in_edges = self.in_edges(node)
+            out_edges = self.out_edges(node)
+            
+            # Collect source nodes (replacing merged nodes with the new node_id)
+            source_nodes.update([s if s not in actual_nodes else node_id for s, _ in in_edges])
 
-            elif node_id in self.nodes() and (node_id not in nodes):
-                raise GraphError(
-                    "New name for merged node is not valid: "
-                    "node with name '%s' already exists!" % node_id
-                )
-            # Merge data attached to node according to the method specified
-            # restore proper connectivity
-            if method == "union":
-                attr_accumulator = {}
-            elif method == "intersection":
-                attr_accumulator = safe_deepcopy_dict(
-                    self.get_node(nodes[0]))
-            else:
-                raise ReGraphError("Merging method '{}' is not defined!".format(
-                    method))
+            # Collect target nodes (replacing merged nodes with the new node_id)
+            target_nodes.update([t if t not in actual_nodes else node_id for _, t in out_edges])
 
-            self_loop = False
-            self_loop_attrs = {}
-
-            source_nodes = set()
-            target_nodes = set()
-
-            source_dict = {}
-            target_dict = {}
-
-            for node in nodes:
-                attr_accumulator = merge_attributes(
-                    attr_accumulator, self.get_node(node), method)
-
-                in_edges = self.in_edges(node)
-                out_edges = self.out_edges(node)
-
-                # manage self loops
-                for s, t in in_edges:
-                    if s in nodes:
-                        self_loop = True
-                        if len(self_loop_attrs) == 0:
-                            self_loop_attrs = self.get_edge(s, t)
-                        else:
-                            self_loop_attrs = merge_attributes(
-                                self_loop_attrs,
-                                self.get_edge(s, t),
-                                edge_method)
-
-                for s, t in out_edges:
-                    if t in nodes:
-                        self_loop = True
-                        if len(self_loop_attrs) == 0:
-                            self_loop_attrs = self.get_edge(s, t)
-                        else:
-                            self_loop_attrs = merge_attributes(
-                                self_loop_attrs,
-                                self.get_edge(s, t),
-                                edge_method)
-
-                source_nodes.update(
-                    [n if n not in nodes else node_id
-                     for n, _ in in_edges])
-                target_nodes.update(
-                    [n if n not in nodes else node_id
-                     for _, n in out_edges])
-
-                for edge in in_edges:
-                    if not edge[0] in source_dict.keys():
-                        attrs = self.get_edge(edge[0], edge[1])
-                        source_dict.update({edge[0]: attrs})
-                    else:
-                        attrs = merge_attributes(
-                            source_dict[edge[0]],
-                            self.get_edge(edge[0], edge[1]),
-                            edge_method)
-                        source_dict.update({edge[0]: attrs})
-
-                for edge in out_edges:
-                    if not edge[1] in target_dict.keys():
-                        attrs = self.get_edge(edge[0], edge[1])
-                        target_dict.update({edge[1]: attrs})
-                    else:
-                        attrs = merge_attributes(
-                            target_dict[edge[1]],
-                            self.get_edge(edge[0], edge[1]),
-                            edge_method)
-                        target_dict.update({edge[1]: attrs})
-                self.remove_node(node)
-
-            self.add_node(node_id, attr_accumulator)
-
-            if self_loop:
-                self.add_edges_from([(node_id, node_id)])
-                self.set_edge(node_id, node_id, self_loop_attrs)
-            for n in source_nodes:
-                if not self.exists_edge(n, node_id):
-                    self.add_edge(n, node_id)
-            for n in target_nodes:
-                if not self.exists_edge(node_id, n):
-                    self.add_edge(node_id, n)
-
-            # Attach accumulated attributes to edges
-            for node, attrs in source_dict.items():
-                if node not in nodes:
-                    self.set_edge(node, node_id, attrs)
-            for node, attrs in target_dict.items():
-                if node not in nodes:
-                    self.set_edge(node_id, node, attrs)
-
-            return node_id
-        else:
-            raise ReGraphError(
-                "More than two nodes should be specified for merging!")
+            # Remove the processed node
+            self.remove_node(node)
+        
+        # Create the new merged node with the collected attributes
+        self.add_node(node_id, merged_attrs)
+        
+        # Create edges to/from the merged node
+        for source in source_nodes:
+            if source != node_id:  # Skip if it's a reference to the merged node itself
+                self.add_edge(source, node_id)
+        
+        for target in target_nodes:
+            if target != node_id:  # Skip if it's a reference to the merged node itself
+                self.add_edge(node_id, target)
+        
+        return node_id          
 
     def copy_node(self, node_id, copy_id=None):
         """Copy node.
@@ -970,9 +935,7 @@ class Graph(ABC):
 
         # Remove node attributes
         for p_node, attrs in rule.removed_node_attrs().items():
-            self.remove_node_attrs(
-                p_g[p_node],
-                attrs)
+            self.remove_node_attrs(p_g[p_node], attrs)
 
         # Remove edge attributes
         for (u, v), attrs in rule.removed_edge_attrs().items():
@@ -984,12 +947,11 @@ class Graph(ABC):
 
         # Merge nodes
         for rhs, p_nodes in rule.merged_nodes().items():
-            merge_id = self.merge_nodes(
-                [p_g[p] for p in p_nodes])
+            merge_id = self.merge_nodes([p_g[p] for p in p_nodes])
             merged_nodes.add(rhs)
             rhs_g[rhs] = merge_id
 
-        # Add nodes and add preserved nodes to rhs_g dictionary
+        # Add nodes and add preserved nodes to the rhs_g dictionary
         added_nodes = rule.added_nodes()
         for n in rule.rhs.nodes():
             if n in added_nodes:
@@ -1008,14 +970,13 @@ class Graph(ABC):
                 self.add_edge(rhs_g[u], rhs_g[v])
 
         # Add node attributes
-        for rhs_node, attrs in rule.added_node_attrs().items():
-            self.add_node_attrs(
-                rhs_g[rhs_node], attrs)
+        #for rhs_node, attrs in rule.added_node_attrs().items():
+        #    self.add_node_attrs(rhs_g[rhs_node], attrs)
 
         # Add edge attributes
-        for (u, v), attrs in rule.added_edge_attrs().items():
-            self.add_edge_attrs(
-                rhs_g[u], rhs_g[v], attrs)
+        #for (u, v), attrs in rule.added_edge_attrs().items():
+        #    self.add_edge_attrs(rhs_g[u], rhs_g[v], attrs)
+            
         return rhs_g
 
     def number_of_edges(self, u, v):

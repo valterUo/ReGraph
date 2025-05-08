@@ -1,8 +1,6 @@
 """Collection of generic utils for Cypher queries generation."""
 import uuid
-import tempfile
 import json
-import os
 
 from regraph.attribute_sets import (FiniteSet,
                                     IntegerSet,
@@ -141,7 +139,7 @@ def generate_var_name():
 def set_id(node_label, old_id, new_id):
     """Generate a subquery to set new id for the node."""
     query = (
-        "MATCH (n:{} {{id : '{}'}})\n".format(node_label, old_id) +
+        "MATCH (n:{} {{id: {}}})\n".format(node_label, old_id) +
         "SET n.id = '{}'".format(new_id)
     )
     return query
@@ -151,11 +149,24 @@ def set_attributes(var_name, attrs=None, update=False):
     """Generate a subquery to set the attributes for some variable."""
     query = ""
     if not attrs:
-        query += (
+        if False:
+            query += (
             "SET {} = apoc.map.clean(properties({}), \n".format(var_name, var_name) +
-            "\tfilter(x IN keys({}) WHERE NOT x IN [] AND x <> 'id'), [])".format(
+            "\tfilter(x IN keys({}) WHERE NOT x IN [] AND x <> 'id'), [])\n".format(
                 var_name)
-        )
+            )
+        query += (
+                """
+                WITH {0}, {0}.id AS preservedId
+                    CALL {{
+                    WITH {0}
+                    UNWIND keys({0}) AS key
+                    WITH {0}, key WHERE key <> 'id'
+                    REMOVE {0}.key
+                    }}
+                    SET {0}.id = preservedId
+                """.format(var_name)
+            )
     for k, value in attrs.items():
         if isinstance(value, IntegerSet):
             if value.is_universal:
@@ -192,7 +203,7 @@ def set_attributes(var_name, attrs=None, update=False):
         # remove all the attributes not mentioned in 'attrs'
         query += (
             "SET {} = apoc.map.clean(properties({}), \n".format(var_name, var_name) +
-            "\tfilter(x IN keys({}) WHERE NOT x IN [{}] AND x <> 'id'), [])".format(
+            "\tfilter(x IN keys({}) WHERE NOT x IN [{}] AND x <> 'id'), [])\n".format(
                 var_name,
                 ", ".join("'{}'".format(k) for k in attrs.keys()))
         )
@@ -276,7 +287,10 @@ def match_node(var_name, node_id, node_label):
     label
         Label of the node to match, default is 'node'
     """
-    return "MATCH ({}:{} {{ id : '{}' }})\n".format(
+    if type(node_id) == str:
+        node_id = "'{}'".format(node_id)
+        
+    return "MATCH ({}:{} {{ id : {} }})\n".format(
         var_name, node_label, node_id)
 
 
@@ -296,11 +310,18 @@ def match_nodes(var_id_dict, node_label=None):
     if node_label:
         node_label_str = ":{}".format(node_label)
 
-    query =\
-        "MATCH " +\
-        ", ".join("({}{} {{ id : '{}'}}) ".format(
-            var_name, node_label_str, node_id)
-            for var_name, node_id in var_id_dict.items()) + " "
+    query = "MATCH "
+
+    for i, (var_name, node_id) in enumerate(var_id_dict.items()):
+        
+        if type(node_id) == str:
+            node_id = "'{}'".format(node_id)
+        
+        if i < len(var_id_dict) - 1:
+            query += "({}{} {{ id: {}}}), ".format(var_name, node_label_str, node_id)
+        else:
+            query += "({}{} {{ id: {}}}) ".format(var_name, node_label_str, node_id)
+    
     return query
 
 
@@ -326,7 +347,7 @@ def match_edge(u_var, v_var, u_id, v_id, edge_var, u_label, v_label,
         Label of the edge to match, default is 'edge'
     """
     query =\
-        "MATCH ({}:{} {{id: '{}'}})-[{}:{}]->({}:{} {{id: '{}'}})\n".format(
+        "MATCH ({}:{} {{id: {}}})-[{}:{}]->({}:{} {{id: {}}})\n".format(
             u_var, u_label, u_id, edge_var, edge_label, v_var, v_label, v_id)
     return query
 
@@ -425,8 +446,12 @@ def successors_query(var_name, node_id, node_label,
         arrow = ">"
     else:
         arrow = ""
+    
+    if type(node_id) == str:
+        node_id = "'{}'".format(node_id)
+    
     query = (
-        "OPTIONAL MATCH (`{}`:{} {{id : '{}'}})-[:{}]-{}(suc:{})\n".format(
+        "OPTIONAL MATCH (`{}`:{} {{id: {} }})-[:{}]-{}(suc:{})\n".format(
             var_name, node_label,
             node_id, edge_label,
             arrow,
@@ -455,8 +480,12 @@ def predecessors_query(var_name, node_id, node_label,
     """
     if predecessor_label is None:
         predecessor_label = node_label
+    
+    if type(node_id) == str:
+        node_id = "'{}'".format(node_id)
+    
     query = (
-        "OPTIONAL MATCH (pred:{})-[:{}]-> (n:{} {{id : '{}'}})\n".format(
+        "OPTIONAL MATCH (pred:{})-[:{}]-> (n:{} {{id: {} }})\n".format(
             predecessor_label,
             edge_label,
             node_label, node_id) +
@@ -465,16 +494,10 @@ def predecessors_query(var_name, node_id, node_label,
     return query
 
 
-# def get_node(node_id, node_label):
-#     """Get node by its id (match and return it)."""
-#     return match_node(
-#         "n", node_id, node_label=node_label) + return_vars(["n"])
-
-
 def get_edge(s, t, source_label, target_label, edge_label):
     """Get edge by the ids of its incident nodes."""
     query =\
-        "MATCH (n:{} {{id: '{}'}})-[rel:{}]->(m:{} {{id: '{}'}})".format(
+        "MATCH (n:{} {{id: {}}})-[rel:{}]->(m:{} {{id: {}}})".format(
             source_label, s, edge_label, target_label, t) +\
         "RETURN rel\n"
 
@@ -819,7 +842,7 @@ def duplicate_node(original_var, clone_var, clone_id, clone_id_var,
     else:
         query = (
             "// search for a node with the same id as the clone id\n" +
-            "OPTIONAL MATCH (same_id_node:node:{} {{ id : '{}'}}) \n".format(
+            "OPTIONAL MATCH (same_id_node:node:{} {{ id: {}}}) \n".format(
                 clone_graph, clone_id) +
             "WITH same_id_node,  " +
             "CASE WHEN same_id_node IS NOT NULL "
@@ -972,22 +995,12 @@ def nb_of_attrs_mismatch(source, target):
         "\t\t\t\tELSE CASE WHEN NOT v IN {}[k] THEN 1 ELSE 0 END END)\n".format(target) +
         "\t\tEND)"
     )
-
-    # query = (
-    #     "REDUCE(invalid = 0, k in filter(k in keys({}) WHERE k <> 'id') |\n".format(source) +
-    #     "\tinvalid + CASE\n" +
-    #     "\t\tWHEN NOT k IN keys({}) THEN 1\n".format(target) +
-    #     "\t\tELSE REDUCE(invalid_values = 0, v in {}[k] |\n".format(source) +
-    #     "\t\t\tinvalid_values + CASE\n" +
-    #     "\t\t\t\tWHEN NOT v IN {}[k] THEN 1 ELSE 0 END)\n".format(target) +
-    #     "\t\tEND)"
-    # )
     return query
 
 
 def exists_edge(s, t, node_label, edge_label):
     query = (
-        "RETURN EXISTS( (:{} {{ id: '{}' }})-[:{}]->(:{} {{ id: '{}' }}) ) AS result".format(
+        "RETURN EXISTS( (:{} {{ id: {} }})-[:{}]->(:{} {{ id: {} }}) ) AS result".format(
             node_label, s, edge_label, node_label, t)
     )
     return query
@@ -1012,8 +1025,10 @@ def attributes_inclusion(source_var, target_var, result_var):
 
 def get_node_attrs(node_id, node_label, attrs_var):
     """Query for retreiving node's attributes."""
+    if type(node_id) is str:
+        node_id = "'{}'".format(node_id)
     query = (
-        "MATCH (n:{} {{ id: '{}' }}) \n".format(
+        "MATCH (n:{} {{ id: {} }}) \n".format(
             node_label, node_id) +
         "RETURN properties(n) as {}\n".format(attrs_var)
     )
@@ -1023,7 +1038,7 @@ def get_node_attrs(node_id, node_label, attrs_var):
 def get_edge_attrs(source_id, targe_id, node_label, edge_label, attrs_var):
     """Query for retreiving edge's attributes."""
     query = (
-        "MATCH (n:{} {{ id: '{}' }})-[rel:{}]->(m:{} {{ id: '{}' }}) \n".format(
+        "MATCH (n:{} {{ id: {} }})-[rel:{}]->(m:{} {{ id: {} }}) \n".format(
             node_label, source_id, edge_label, node_label, targe_id) +
         "RETURN properties(rel) as {}\n".format(attrs_var)
     )
@@ -1064,7 +1079,7 @@ def properties_to_attributes(result, var_name):
 def descendants_query(node_id, node_label, edge_label="edge"):
     """Generate Cypher query finding descendant nodes starting at 'node_id'."""
     return (
-        "MATCH path=(n:{} {{id: '{}'}})-[:{}*1..]->(m:{})\n".format(
+        "MATCH path=(n:{} {{id: {}}})-[:{}*1..]->(m:{})\n".format(
             node_label, node_id, edge_label, node_label) +
         "RETURN m.id AS descendant, REDUCE(p=[], n in nodes(path) | p + [n.id]) as path\n"
     )
@@ -1073,7 +1088,7 @@ def descendants_query(node_id, node_label, edge_label="edge"):
 def ancestors_query(node_id, node_label, edge_label="edge"):
     """Generate Cypher query finding ancestors nodes starting at 'node_id'."""
     return (
-        "MATCH path=(m:{})-[:{}*1..]->(n:{} {{id: '{}'}})\n".format(
+        "MATCH path=(m:{})-[:{}*1..]->(n:{} {{id: {}}})\n".format(
             node_label, node_id, edge_label, node_label) +
         "RETURN m.id AS ancestor, REDUCE(p=[], n in nodes(path) | p + [n.id]) as path\n"
     )
@@ -1081,7 +1096,7 @@ def ancestors_query(node_id, node_label, edge_label="edge"):
 
 def shortest_path_query(source_id, target_id, node_label, edge_label):
     return (
-        "MATCH path=shortestPath((n:{} {{id: '{}'}})-[{}*1..]->(m:{} {{id: '{}'}})) \n".format(
+        "MATCH path=shortestPath((n:{} {{id: {}}})-[{}*1..]->(m:{} {{id: {}}})) \n".format(
             node_label, source_id, edge_label, node_label, target_id) +
         "RETURN REDUCE(p=[], l in nodes(path) | p + [l.id]) as path"
     )
