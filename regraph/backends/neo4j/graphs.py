@@ -91,7 +91,7 @@ class Neo4jGraph(Graph):
         with self._driver.session() as session:
             if len(query) > 0:
                 result = session.run(query)
-                return result
+                return result.data()
 
     def _close(self):
         """Close connection to the database."""

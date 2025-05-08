@@ -97,7 +97,7 @@ def plot_graph(graph, filename=None, parent_pos=None, title=None):
     nx.draw_networkx_nodes(
         graph._graph, pos, node_color=[[0.6, 0.8, 0.047]] * len(graph.nodes()),
         node_size=200, scale=1.0)
-    nx.draw_networkx_edges(graph._graph, pos, alpha=0.4, width=2.0, node_size=200)
+    nx.draw_networkx_edges(graph._graph, pos, alpha=0.4, width=2.0, node_size=200, arrows=True)
 
     labels = {}
     for node in graph.nodes():
@@ -195,7 +195,7 @@ def plot_instance(graph, pattern, instance, filename=None,
     nx.draw_networkx_nodes(
         graph._graph, pos, node_color=new_colors, node_size=200)
     nx.draw_networkx_edges(
-        graph._graph, pos, alpha=0.4, width=2.0, node_size=200, scale=1.0)
+        graph._graph, pos, alpha=0.4, width=2.0, node_size=200, scale=1.0, arrows=True)
 
     # Draw pattern edges highlighted
     edgelist = [(instance[edge[0]], instance[edge[1]])
@@ -203,7 +203,11 @@ def plot_instance(graph, pattern, instance, filename=None,
     nx.draw_networkx_edges(
         graph._graph, pos,
         edgelist=edgelist,
-        width=3, alpha=0.3, edge_color=[instance_color] * len(edgelist), node_size=200)
+        width=3, 
+        alpha=0.3, 
+        edge_color=[instance_color] * len(edgelist), 
+        node_size=200, 
+        arrows=True)
 
     min_y = min(
         [v[1] for v in pos.values()])
